@@ -254,7 +254,11 @@ def train(rank, gpu, args):
             "./data",
             train=True,
             transform=transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+                [
+                    transforms.Resize(32),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.1307,), (0.3081,)),
+                ]
             ),
             download=True,
         )
@@ -316,7 +320,12 @@ def train(rank, gpu, args):
 
     netG = NCSNpp(args).to(device)
 
-    if args.dataset == "cifar10" or args.dataset == "stackmnist":
+    if (
+        args.dataset == "cifar10"
+        or args.dataset == "stackmnist"
+        or args.dataset == "mnist"
+    ):
+        print("Discriminator small")
         netD = Discriminator_small(
             nc=2 * args.num_channels,
             ngf=args.ngf,
@@ -324,6 +333,7 @@ def train(rank, gpu, args):
             act=nn.LeakyReLU(0.2),
         ).to(device)
     else:
+        print("Discriminator large")
         netD = Discriminator_large(
             nc=2 * args.num_channels,
             ngf=args.ngf,
