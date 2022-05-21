@@ -8,3 +8,5 @@ lmdb
 matplotlib
 scipy
 ninja
+tqdm
+wandb==0.12.16

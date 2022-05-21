@@ -9,6 +9,8 @@
 import argparse
 import os
 import shutil
+import time
+from distutils.util import strtobool
 
 import numpy as np
 import torch
@@ -20,7 +22,9 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.multiprocessing import Process
 from torchvision.datasets import CIFAR10, MNIST
+from tqdm import tqdm
 
+import wandb
 from datasets_prep.lmdb_datasets import LMDBDataset
 from datasets_prep.lsun import LSUN
 from datasets_prep.stackmnist_data import StackedMNIST, _data_transforms_stacked_mnist
@@ -228,6 +232,7 @@ def train(rank, gpu, args):
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
+    torch.backends.cudnn.deterministic = args.torch_deterministic
     device = torch.device("cuda:{}".format(gpu))
 
     batch_size = args.batch_size
@@ -325,7 +330,6 @@ def train(rank, gpu, args):
         or args.dataset == "stackmnist"
         or args.dataset == "mnist"
     ):
-        print("Discriminator small")
         netD = Discriminator_small(
             nc=2 * args.num_channels,
             ngf=args.ngf,
@@ -333,7 +337,6 @@ def train(rank, gpu, args):
             act=nn.LeakyReLU(0.2),
         ).to(device)
     else:
-        print("Discriminator large")
         netD = Discriminator_large(
             nc=2 * args.num_channels,
             ngf=args.ngf,
@@ -401,10 +404,13 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
+    if args.save_content:
+        wandb.watch(netG, log_freq=100)
+
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
 
-        for iteration, (x, y) in enumerate(data_loader):
+        for iteration, (x, y) in enumerate(tqdm(data_loader)):
             for p in netD.parameters():
                 p.requires_grad = True
 
@@ -493,15 +499,19 @@ def train(rank, gpu, args):
 
             global_step += 1
             if iteration % 100 == 0:
-                if rank == 0:
-                    print(
-                        "epoch {} iteration{}, G Loss: {}, D Loss: {}".format(
-                            epoch, iteration, errG.item(), errD.item()
-                        )
+                lossG = errG.item()
+                lossD = errD.item()
+                if args.save_content:
+                    wandb.log(
+                        {
+                            "lossG": lossG,
+                            "lossD": lossD,
+                            "global_step": global_step - 1,
+                            "epoch": epoch,
+                        }
                     )
 
         if not args.no_lr_decay:
-
             schedulerG.step()
             schedulerD.step()
 
@@ -512,6 +522,8 @@ def train(rank, gpu, args):
                     os.path.join(exp_path, "xpos_epoch_{}.png".format(epoch)),
                     normalize=True,
                 )
+                if args.save_content:
+                    wandb.log({"x_posterior_sample": wandb.Image(x_pos_sample)})
 
             x_t_1 = torch.randn_like(real_data)
             fake_sample = sample_from_model(
@@ -522,6 +534,9 @@ def train(rank, gpu, args):
                 os.path.join(exp_path, "sample_discrete_epoch_{}.png".format(epoch)),
                 normalize=True,
             )
+
+            if args.save_content:
+                wandb.log({"model_sample_discrete": wandb.Image(fake_sample)})
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -538,16 +553,25 @@ def train(rank, gpu, args):
                         "schedulerD": schedulerD.state_dict(),
                     }
 
-                    torch.save(content, os.path.join(exp_path, "content.pth"))
+                    file_path = os.path.join(exp_path, "content.pth")
+                    torch.save(content, file_path)
+
+                    wandb.save(file_path)
+                    # wandb.log_artifact(
+                    #     file_path, name="content", type="training_content"
+                    # )
 
             if epoch % args.save_ckpt_every == 0:
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
 
+                file_path = os.path.join(exp_path, "netG_{}.pth".format(epoch))
                 torch.save(
-                    netG.state_dict(),
-                    os.path.join(exp_path, "netG_{}.pth".format(epoch)),
+                    netG.state_dict(), file_path,
                 )
+
+                wandb.save(file_path)
+
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
 
@@ -575,6 +599,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("ddgan parameters")
     parser.add_argument(
         "--seed", type=int, default=1024, help="seed used for initialization"
+    )
+    parser.add_argument(
+        "--torch_deterministic",
+        type=lambda x: bool(strtobool(x)),
+        default=True,
+        nargs="?",
+        const=True,
+        help="if toggled, `torch.backends.cudnn.deterministic=False`",
     )
 
     parser.add_argument("--resume", action="store_true", default=False)
@@ -669,7 +701,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--exp", default="experiment_cifar_default", help="name of experiment"
     )
-    parser.add_argument("--dataset", default="cifar10", help="name of dataset")
+    parser.add_argument(
+        "--dataset", default="cifar10", type=str, help="name of dataset"
+    )
     parser.add_argument("--nz", type=int, default=100)
     parser.add_argument("--num_timesteps", type=int, default=4)
 
@@ -729,6 +763,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
+
+    exp_name = f"{args.exp}_{int(time.time())}"
+
+    if args.save_content:
+        wandb.init(
+            project=f"ddgan-{args.dataset}",
+            name=exp_name,
+            tags=["ddgan", args.dataset],
+            config=vars(args),
+            save_code=True,
+        )
 
     if size > 1:
         processes = []
