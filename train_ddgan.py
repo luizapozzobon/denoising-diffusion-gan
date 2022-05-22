@@ -555,6 +555,9 @@ def train(rank, gpu, args):
 
                     file_path = os.path.join(exp_path, "content.pth")
                     torch.save(content, file_path)
+                    
+                    drive_file_path = os.path.join('/content/drive/Shareddrives/Projeto_Final_IA376/Models', "content.pth")
+                    torch.save(content, drive_file_path)
 
                     wandb.save(file_path)
                     # wandb.log_artifact(
@@ -571,6 +574,9 @@ def train(rank, gpu, args):
                 )
 
                 wandb.save(file_path)
+                
+                drive_file_path = os.path.join('/content/drive/Shareddrives/Projeto_Final_IA376/Models', "netG_{}.pth".format(epoch))
+                torch.save(content, drive_file_path)
 
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
