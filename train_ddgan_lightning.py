@@ -446,6 +446,9 @@ if __name__ == "__main__":
         const=True,
         help="if toggled, `torch.backends.cudnn.deterministic=False`",
     )
+    parser.add_argument(
+        "--tpu", action="store_false", default=False, help="to use tpu or cuda"
+    )
 
     parser.add_argument("--resume", action="store_true", default=False)
 
@@ -620,7 +623,8 @@ if __name__ == "__main__":
 
     # training
     trainer = pl.Trainer(
-        gpus=1,
+        gpus=1 if not args.tpu else None,
+        tpu_cores=8 if args.tpu else None,
         num_nodes=1,
         precision=32,
         # logger=wandb_logger,
