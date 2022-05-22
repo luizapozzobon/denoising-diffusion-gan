@@ -28,6 +28,8 @@ import wandb
 from datasets_prep.lmdb_datasets import LMDBDataset
 from datasets_prep.lsun import LSUN
 from datasets_prep.stackmnist_data import StackedMNIST, _data_transforms_stacked_mnist
+from datasets_prep.controlled_dataset import ControlledDataset
+
 
 
 def copy_source(file, output_dir):
@@ -274,6 +276,12 @@ def train(rank, gpu, args):
             root="./data", train=True, download=False, transform=train_transform
         )
 
+
+    elif args.dataset == "controlled_mnist":
+        dataset = ControlledDataset(
+        classes=[0, 1], proportion=[0.8, 0.2], base_dataset="MNIST"
+    )()
+
     elif args.dataset == "lsun":
 
         train_transform = transforms.Compose(
@@ -371,8 +379,10 @@ def train(rank, gpu, args):
 
     exp = args.exp
     parent_dir = "./saved_info/dd_gan/{}".format(args.dataset)
+    drive_parent_dir = args.gdrive_path + "/saved_info/dd_gan/{}".format(args.dataset)
 
     exp_path = os.path.join(parent_dir, exp)
+    exp_drive_path = os.path.join(drive_parent_dir, exp)
     if rank == 0:
         if not os.path.exists(exp_path):
             os.makedirs(exp_path)
@@ -380,6 +390,12 @@ def train(rank, gpu, args):
             shutil.copytree(
                 "score_sde/models", os.path.join(exp_path, "score_sde/models")
             )
+        if not os.path.exists(exp_drive_path):
+          os.makedirs(exp_drive_path)
+          copy_source(__file__, exp_drive_path)
+          shutil.copytree(
+              "score_sde/models", os.path.join(exp_drive_path, "score_sde/models")
+          )
 
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
@@ -556,7 +572,7 @@ def train(rank, gpu, args):
                     file_path = os.path.join(exp_path, "content.pth")
                     torch.save(content, file_path)
                     
-                    drive_file_path = os.path.join('/content/drive/Shareddrives/Projeto_Final_IA376/Models', "content.pth")
+                    drive_file_path = os.path.join(exp_drive_path, "content.pth")
                     torch.save(content, drive_file_path)
 
                     wandb.save(file_path)
@@ -575,7 +591,7 @@ def train(rank, gpu, args):
 
                 wandb.save(file_path)
                 
-                drive_file_path = os.path.join('/content/drive/Shareddrives/Projeto_Final_IA376/Models', "netG_{}.pth".format(epoch))
+                drive_file_path = os.path.join(exp_drive_path, "netG_{}.pth".format(epoch))
                 torch.save(content, drive_file_path)
 
                 if args.use_ema:
