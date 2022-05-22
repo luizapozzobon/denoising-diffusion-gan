@@ -10,3 +10,4 @@ scipy
 ninja
 tqdm
 wandb==0.12.16
+pytorch_lightning==1.6.3
