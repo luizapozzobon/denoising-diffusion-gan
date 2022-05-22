@@ -764,6 +764,9 @@ if __name__ == "__main__":
         "--save_ckpt_every", type=int, default=25, help="save ckpt every x epochs"
     )
 
+    parser.add_argument("--gdrive_path", default='/content/drive/Shareddrives/Projeto_Final_IA376/Models', help="Save to this drive path")
+
+
     ###ddp
     parser.add_argument(
         "--num_proc_node",
