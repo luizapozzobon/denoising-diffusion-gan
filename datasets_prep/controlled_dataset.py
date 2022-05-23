@@ -24,7 +24,14 @@ class ControlledDataset:
         self.random_state = random_state
         if base_dataset == "MNIST":
             self._base_dataset = datasets.MNIST(
-                download=True, root="./data", transform=transforms.ToTensor()
+                download=True, root="./data", 
+                transform=transforms.Compose(
+                [
+                    transforms.Resize(32),
+                    transforms.ToTensor(),
+                    #transforms.Normalize((0.1307,), (0.3081,)),
+                ]
+                )
             )
         else:
             raise NotImplementedError("Invalid dataset.")
