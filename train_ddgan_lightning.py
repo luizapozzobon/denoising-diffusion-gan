@@ -212,6 +212,7 @@ class DDGAN(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
+        self.automatic_optimization = False
 
         self.netG = NCSNpp(args)
         self.netD = Discriminator_small(
@@ -231,8 +232,6 @@ class DDGAN(pl.LightningModule):
         self.exp_path = os.path.join(parent_dir, exp)
         if not os.path.exists(self.exp_path):
             os.makedirs(self.exp_path)
-
-        self.automatic_optimization = False
 
     def configure_optimizers(self):
         optimizerD = optim.Adam(
@@ -293,19 +292,31 @@ class DDGAN(pl.LightningModule):
 
         errD_real = F.softplus(-D_real)
         errD_real = errD_real.mean()
+        self.manual_backward(errD_real, retain_graph=True)
 
-        errD_real.backward(retain_graph=True)
+        if self.args.lazy_reg is None:
+            grad_real = torch.autograd.grad(
+                outputs=D_real.sum(), inputs=x_t, create_graph=True
+            )[0]
+            grad_penalty = (
+                grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
+            ).mean()
 
-        # if args.lazy_reg is None:
-        grad_real = torch.autograd.grad(
-            outputs=D_real.sum(), inputs=x_t, create_graph=True
-        )[0]
-        grad_penalty = (
-            grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
-        ).mean()
+            grad_penalty = args.r1_gamma / 2 * grad_penalty
+            # grad_penalty.backward()
+            self.manual_backward(grad_penalty)
+        else:
+            if self.global_step % args.lazy_reg == 0:
+                grad_real = torch.autograd.grad(
+                    outputs=D_real.sum(), inputs=x_t, create_graph=True
+                )[0]
+                grad_penalty = (
+                    grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
+                ).mean()
 
-        grad_penalty = args.r1_gamma / 2 * grad_penalty
-        grad_penalty.backward()
+                grad_penalty = args.r1_gamma / 2 * grad_penalty
+                # grad_penalty.backward()
+                self.manual_backward(grad_penalty)
 
         # train with fake
         latent_z = torch.randn(batch_size, nz, device=self.device)
@@ -319,7 +330,7 @@ class DDGAN(pl.LightningModule):
 
         errD_fake = F.softplus(output)
         errD_fake = errD_fake.mean()
-        errD_fake.backward()
+        self.manual_backward(errD_fake)
 
         errD = errD_real + errD_fake
         # Update D
@@ -347,23 +358,17 @@ class DDGAN(pl.LightningModule):
         errG = F.softplus(-output)
         errG = errG.mean()
 
-        errG.backward()
+        self.manual_backward(errG)
         optimizerG.step()
 
-        if batch_idx % 100 == 0:
-            lossG = errG.item()
-            lossD = errD.item()
-            if args.save_content:
-                wandb.log(
-                    {
-                        "lossG": lossG,
-                        "lossD": lossD,
-                        "global_step": self.global_step - 1,
-                        "epoch": epoch,
-                    }
-                )
+        wandb.log(
+            {
+                "train/lossG": errG.item(),
+                "train/lossD": errD.item(),
+                "train/global_step": self.global_step - 1,
+            }
+        )
 
-        # step every N epochs
         if self.trainer.is_last_batch:
             schedulerG.step()
             schedulerD.step()
@@ -409,9 +414,7 @@ class DDGAN(pl.LightningModule):
                 torch.save(content, file_path)
 
                 wandb.save(file_path)
-                # wandb.log_artifact(
-                #     file_path, name="content", type="training_content"
-                # )
+                wandb.log_artifact(file_path, name="content", type="training_content")
 
         if self.trainer.is_last_batch and epoch % self.args.save_ckpt_every == 0:
             if self.args.use_ema:
@@ -424,13 +427,10 @@ class DDGAN(pl.LightningModule):
 
             wandb.save(file_path)
 
-            if args.use_ema:
+            if self.args.use_ema:
                 optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
 
-        self.log("lossG", errG)
-        self.log("lossD", errD)
-
-        return {"lossG": errG, "lossD": errD}
+        return {"loss": errG}
 
 
 if __name__ == "__main__":
@@ -619,18 +619,30 @@ if __name__ == "__main__":
     # model
     model = DDGAN(args)
 
-    # wandb_logger = WandbLogger()
+    wandb_logger = WandbLogger(
+        # project=f"ddgan-{args.dataset}",
+        name=exp_name,
+        tags=["ddgan", args.dataset],
+        config=vars(args),
+        save_code=True,
+        log_model="all",
+    )
+
+    # log gradients, parameter histogram and model topology
+    # wandb_logger.watch(model, log="all")
 
     # training
     trainer = pl.Trainer(
         gpus=1 if not args.tpu else None,
         tpu_cores=8 if args.tpu else None,
         num_nodes=1,
-        precision=32,
-        # logger=wandb_logger,
+        precision=16,
+        logger=wandb_logger,
         max_epochs=args.num_epoch,
         limit_val_batches=0,
         num_sanity_val_steps=0,
+        # track_grad_norm=2,
+        # detect_anomaly=True,
     )
     print("Starting training")
     trainer.fit(model, train_loader)
