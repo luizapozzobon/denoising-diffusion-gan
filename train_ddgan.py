@@ -21,15 +21,15 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 from torch.multiprocessing import Process
+from torch.utils.data import Subset
 from torchvision.datasets import CIFAR10, MNIST
 from tqdm import tqdm
 
 import wandb
+from datasets_prep.controlled_dataset import ControlledDataset
 from datasets_prep.lmdb_datasets import LMDBDataset
 from datasets_prep.lsun import LSUN
 from datasets_prep.stackmnist_data import StackedMNIST, _data_transforms_stacked_mnist
-from datasets_prep.controlled_dataset import ControlledDataset
-
 
 
 def copy_source(file, output_dir):
@@ -269,6 +269,7 @@ def train(rank, gpu, args):
             ),
             download=True,
         )
+        dataset = Subset(dataset, list(range(2)))
 
     elif args.dataset == "stackmnist":
         train_transform, valid_transform = _data_transforms_stacked_mnist()
@@ -276,11 +277,10 @@ def train(rank, gpu, args):
             root="./data", train=True, download=False, transform=train_transform
         )
 
-
     elif args.dataset == "controlled_mnist":
         dataset = ControlledDataset(
-        classes=[0, 1], proportion=[0.8, 0.2], base_dataset="MNIST"
-    )()
+            classes=[0, 1], proportion=[0.8, 0.2], base_dataset="MNIST"
+        )()
 
     elif args.dataset == "lsun":
 
@@ -391,11 +391,11 @@ def train(rank, gpu, args):
                 "score_sde/models", os.path.join(exp_path, "score_sde/models")
             )
         if not os.path.exists(exp_drive_path):
-          os.makedirs(exp_drive_path)
-          copy_source(__file__, exp_drive_path)
-          shutil.copytree(
-              "score_sde/models", os.path.join(exp_drive_path, "score_sde/models")
-          )
+            os.makedirs(exp_drive_path)
+            copy_source(__file__, exp_drive_path)
+            shutil.copytree(
+                "score_sde/models", os.path.join(exp_drive_path, "score_sde/models")
+            )
 
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
@@ -571,9 +571,9 @@ def train(rank, gpu, args):
 
                     file_path = os.path.join(exp_path, "content.pth")
                     torch.save(content, file_path)
-                    
-                    drive_file_path = os.path.join(exp_drive_path, "content.pth")
-                    torch.save(content, drive_file_path)
+
+                    # drive_file_path = os.path.join(exp_drive_path, "content.pth")
+                    # torch.save(content, drive_file_path)
 
                     wandb.save(file_path)
                     # wandb.log_artifact(
@@ -590,8 +590,10 @@ def train(rank, gpu, args):
                 )
 
                 wandb.save(file_path)
-                
-                drive_file_path = os.path.join(exp_drive_path, "netG_{}.pth".format(epoch))
+
+                drive_file_path = os.path.join(
+                    exp_drive_path, "netG_{}.pth".format(epoch)
+                )
                 torch.save(content, drive_file_path)
 
                 if args.use_ema:
@@ -764,8 +766,11 @@ if __name__ == "__main__":
         "--save_ckpt_every", type=int, default=25, help="save ckpt every x epochs"
     )
 
-    parser.add_argument("--gdrive_path", default='/content/drive/Shareddrives/Projeto_Final_IA376/Models', help="Save to this drive path")
-
+    parser.add_argument(
+        "--gdrive_path",
+        default="/content/drive/Shareddrives/Projeto_Final_IA376/Models",
+        help="Save to this drive path",
+    )
 
     ###ddp
     parser.add_argument(
@@ -787,6 +792,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
+
+    print(vars(args))
+
     size = args.num_process_per_node
 
     exp_name = f"{args.exp}_{int(time.time())}"
