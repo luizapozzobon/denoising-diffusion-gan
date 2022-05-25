@@ -379,8 +379,7 @@ class DDGAN(pl.LightningModule):
                 os.path.join(self.exp_path, "xpos_epoch_{}.png".format(epoch)),
                 normalize=True,
             )
-            if args.save_content:
-                wandb.log({"x_posterior_sample": wandb.Image(x_pos_sample)})
+            wandb.log({"x_posterior_sample": wandb.Image(x_pos_sample)})
 
         x_t_1 = torch.randn_like(real_data)
         fake_sample = sample_from_model(
@@ -392,8 +391,7 @@ class DDGAN(pl.LightningModule):
             normalize=True,
         )
 
-        if args.save_content:
-            wandb.log({"model_sample_discrete": wandb.Image(fake_sample)})
+        wandb.log({"model_sample_discrete": wandb.Image(fake_sample)})
 
         if args.save_content:
             if epoch % args.save_content_every == 0:
@@ -576,14 +574,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_content_every",
         type=int,
-        default=50,
+        default=2,
         help="save content for resuming every x epochs",
     )
     parser.add_argument(
-        "--save_ckpt_every", type=int, default=25, help="save ckpt every x epochs"
+        "--save_ckpt_every", type=int, default=2, help="save ckpt every x epochs"
     )
 
     args = parser.parse_args()
+
+    print(vars(args))
 
     # Seed everything
     pl.seed_everything(args.seed)
