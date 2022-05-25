@@ -12,14 +12,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
+import wandb
 from pytorch_lightning.loggers import WandbLogger
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from torchvision.datasets import MNIST
 
-import wandb
 from EMA import EMA
 from score_sde.models.discriminator import Discriminator_small
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
@@ -373,28 +373,40 @@ class DDGAN(pl.LightningModule):
             schedulerG.step()
             schedulerD.step()
 
-        if epoch % 10 == 0:
+        if (
+            self.args.save_content
+            and (
+                self.trainer.is_last_batch or batch_idx == self.args.limit_train_batches
+            )
+            and epoch % 10 == 0
+        ):
             torchvision.utils.save_image(
                 x_pos_sample,
                 os.path.join(self.exp_path, "xpos_epoch_{}.png".format(epoch)),
                 normalize=True,
             )
             wandb.log({"x_posterior_sample": wandb.Image(x_pos_sample)})
+        if self.args.save_content and (
+            self.trainer.is_last_batch or batch_idx + 1 == self.args.limit_train_batches
+        ):
+            x_t_1 = torch.randn_like(real_data)
+            fake_sample = sample_from_model(
+                self.pos_coeff, self.netG, args.num_timesteps, x_t_1, self.T, args,
+            )
+            torchvision.utils.save_image(
+                fake_sample,
+                os.path.join(
+                    self.exp_path, "sample_discrete_epoch_{}.png".format(epoch)
+                ),
+                normalize=True,
+            )
+            wandb.log({"model_sample_discrete": wandb.Image(fake_sample)})
 
-        x_t_1 = torch.randn_like(real_data)
-        fake_sample = sample_from_model(
-            self.pos_coeff, self.netG, args.num_timesteps, x_t_1, self.T, args,
-        )
-        torchvision.utils.save_image(
-            fake_sample,
-            os.path.join(self.exp_path, "sample_discrete_epoch_{}.png".format(epoch)),
-            normalize=True,
-        )
-
-        wandb.log({"model_sample_discrete": wandb.Image(fake_sample)})
-
-        if args.save_content:
-            if epoch % args.save_content_every == 0:
+        if self.args.save_content:
+            if (
+                self.trainer.is_last_batch
+                or batch_idx + 1 == self.args.limit_train_batches
+            ) and (epoch % args.save_content_every == 0):
                 print("Saving content.")
                 content = {
                     "epoch": epoch + 1,
@@ -414,7 +426,9 @@ class DDGAN(pl.LightningModule):
                 wandb.save(file_path)
                 wandb.log_artifact(file_path, name="content", type="training_content")
 
-        if self.trainer.is_last_batch and epoch % self.args.save_ckpt_every == 0:
+        if (
+            self.trainer.is_last_batch or batch_idx + 1 == self.args.limit_train_batches
+        ) and epoch % self.args.save_ckpt_every == 0:
             if self.args.use_ema:
                 optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
 
@@ -428,7 +442,7 @@ class DDGAN(pl.LightningModule):
             if self.args.use_ema:
                 optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
 
-        return {"loss": errG}
+        return errG
 
 
 if __name__ == "__main__":
@@ -580,6 +594,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_ckpt_every", type=int, default=2, help="save ckpt every x epochs"
     )
+    parser.add_argument(
+        "--limit_train_batches", type=int, default=None, help="limit training batches"
+    )
 
     args = parser.parse_args()
 
@@ -606,6 +623,7 @@ if __name__ == "__main__":
         ),
         download=True,
     )
+    # dataset = Subset(dataset, indices=range(130))
 
     train_loader = DataLoader(
         dataset,
@@ -620,12 +638,12 @@ if __name__ == "__main__":
     model = DDGAN(args)
 
     wandb_logger = WandbLogger(
-        # project=f"ddgan-{args.dataset}",
+        project=f"ddgan-{args.dataset}-lightning",
         name=exp_name,
         tags=["ddgan", args.dataset],
         config=vars(args),
         save_code=True,
-        log_model="all",
+        # log_model="all",
     )
 
     # log gradients, parameter histogram and model topology
@@ -641,6 +659,9 @@ if __name__ == "__main__":
         max_epochs=args.num_epoch,
         limit_val_batches=0,
         num_sanity_val_steps=0,
+        # https://github.com/PyTorchLightning/pytorch-lightning/issues/5149
+        limit_train_batches=args.limit_train_batches or 1.0,
+        log_every_n_steps=args.limit_train_batches or 50,
         # track_grad_norm=2,
         # detect_anomaly=True,
     )
