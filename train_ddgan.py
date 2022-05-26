@@ -31,7 +31,6 @@ from datasets_prep.lsun import LSUN
 from datasets_prep.stackmnist_data import StackedMNIST, _data_transforms_stacked_mnist
 
 
-
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
 
@@ -242,6 +241,15 @@ def train(rank, gpu, args):
     batch_size = args.batch_size
 
     nz = args.nz  # latent dimension
+    if rank == 0 and args.save_content:
+        wandb.init(
+            project=f"ddgan-{args.dataset}",
+            name=exp_name,
+            tags=["ddgan", args.dataset],
+            config=vars(args),
+            group="experiment_1",
+            # save_code=True,
+        )
 
     if args.dataset == "cifar10":
         dataset = CIFAR10(
@@ -418,8 +426,8 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
-    if args.save_content:
-        wandb.watch(netG, log_freq=100)
+    # if args.save_content:
+        # wandb.watch(netG, log_freq=100)
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
@@ -515,7 +523,7 @@ def train(rank, gpu, args):
             if iteration % 100 == 0:
                 lossG = errG.item()
                 lossD = errD.item()
-                if args.save_content:
+                if rank == 0 and args.save_content:
                     wandb.log(
                         {
                             "lossG": lossG,
@@ -574,9 +582,9 @@ def train(rank, gpu, args):
                     # torch.save(content, drive_file_path)
 
                     wandb.save(file_path)
-                    # wandb.log_artifact(
-                    #     file_path, name="content", type="training_content"
-                    # )
+                    wandb.log_artifact(
+                        file_path, name="content", type="training_content"
+                    )
 
             if epoch % args.save_ckpt_every == 0:
                 if args.use_ema:
@@ -795,15 +803,6 @@ if __name__ == "__main__":
 
     exp_name = f"{args.exp}_{int(time.time())}"
 
-    if args.save_content:
-        wandb.init(
-            project=f"ddgan-{args.dataset}",
-            name=exp_name,
-            tags=["ddgan", args.dataset],
-            config=vars(args),
-            save_code=True,
-        )
-
     if size > 1:
         processes = []
         for rank in range(size):
@@ -821,10 +820,10 @@ if __name__ == "__main__":
             p.start()
             processes.append(p)
 
+
         for p in processes:
             p.join()
     else:
         print("starting in debug mode")
-
         init_processes(0, size, train, args)
 
