@@ -11,6 +11,7 @@ import os
 import shutil
 import time
 from distutils.util import strtobool
+import random
 
 import numpy as np
 import torch
@@ -28,7 +29,6 @@ import wandb
 from datasets_prep.lmdb_datasets import LMDBDataset
 from datasets_prep.lsun import LSUN
 from datasets_prep.stackmnist_data import StackedMNIST, _data_transforms_stacked_mnist
-from datasets_prep.controlled_dataset import ControlledDataset
 
 
 
@@ -231,6 +231,8 @@ def train(rank, gpu, args):
     from score_sde.models.discriminator import Discriminator_large, Discriminator_small
     from score_sde.models.ncsnpp_generator_adagn import NCSNpp
 
+    random.seed(args.seed + rank)
+    np.random.seed(args.seed + rank)
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
@@ -257,16 +259,18 @@ def train(rank, gpu, args):
         )
 
     elif args.dataset == "mnist":
+
+        transform = transforms.Compose([transforms.Resize(32)])
+        if args.invert_p is not None:
+            transform.transforms.append(transforms.RandomInvert(p=args.invert_p))
+        transform.transforms.extend([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,))])
+
         dataset = MNIST(
             "./data",
             train=True,
-            transform=transforms.Compose(
-                [
-                    transforms.Resize(32),
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.1307,), (0.3081,)),
-                ]
-            ),
+            transform=transform,
             download=True,
         )
 
@@ -275,12 +279,6 @@ def train(rank, gpu, args):
         dataset = StackedMNIST(
             root="./data", train=True, download=False, transform=train_transform
         )
-
-
-    elif args.dataset == "controlled_mnist":
-        dataset = ControlledDataset(
-        classes=[0, 1], proportion=[0.8, 0.2], base_dataset="MNIST"
-    )()
 
     elif args.dataset == "lsun":
 
@@ -390,12 +388,12 @@ def train(rank, gpu, args):
             shutil.copytree(
                 "score_sde/models", os.path.join(exp_path, "score_sde/models")
             )
-        if not os.path.exists(exp_drive_path):
-          os.makedirs(exp_drive_path)
-          copy_source(__file__, exp_drive_path)
-          shutil.copytree(
-              "score_sde/models", os.path.join(exp_drive_path, "score_sde/models")
-          )
+        # if not os.path.exists(exp_drive_path):
+          # os.makedirs(exp_drive_path)
+          # copy_source(__file__, exp_drive_path)
+          # shutil.copytree(
+          #     "score_sde/models", os.path.join(exp_drive_path, "score_sde/models")
+          # )
 
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
@@ -572,8 +570,8 @@ def train(rank, gpu, args):
                     file_path = os.path.join(exp_path, "content.pth")
                     torch.save(content, file_path)
                     
-                    drive_file_path = os.path.join(exp_drive_path, "content.pth")
-                    torch.save(content, drive_file_path)
+                    # drive_file_path = os.path.join(exp_drive_path, "content.pth")
+                    # torch.save(content, drive_file_path)
 
                     wandb.save(file_path)
                     # wandb.log_artifact(
@@ -591,8 +589,8 @@ def train(rank, gpu, args):
 
                 wandb.save(file_path)
                 
-                drive_file_path = os.path.join(exp_drive_path, "netG_{}.pth".format(epoch))
-                torch.save(content, drive_file_path)
+                # drive_file_path = os.path.join(exp_drive_path, "netG_{}.pth".format(epoch))
+                # torch.save(content, drive_file_path)
 
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
@@ -784,6 +782,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--master_address", type=str, default="127.0.0.1", help="address for master"
     )
+
+    ## controlled dataset
+    parser.add_argument(
+        "--invert_p", type=float, default=None, help="If passed, applies a RandomInvert with this prob"
+    )
+
 
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
